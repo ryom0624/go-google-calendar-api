@@ -215,7 +215,7 @@ func main() {
 	// 	fmt.Printf("%064b\n", v)
 	// }
 
-	resp := make(BitsToCalendars, 0, days)
+	displayToFreeBusyCalendar := make(BitsToCalendars, 0, days)
 	for i, v := range dateBits {
 		date, _ := time.Parse("2006/01/02", i)
 		// fmt.Printf("-------%v-------\n", i)
@@ -237,11 +237,11 @@ func main() {
 				bt.BitsToCalendarTimes = append(bt.BitsToCalendarTimes, calendarTime)
 			}
 		}
-		resp = append(resp, bt)
+		displayToFreeBusyCalendar = append(displayToFreeBusyCalendar, bt)
 		// fmt.Printf("-------%v-------\n", i)
 	}
 
-	b, err := json.MarshalIndent(resp, "", "    ")
+	b, err := json.MarshalIndent(displayToFreeBusyCalendar, "", "    ")
 	if err != nil {
 		log.Fatal(err)
 	}
