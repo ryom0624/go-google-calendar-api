@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/calendar/v3"
@@ -34,44 +35,44 @@ var CalendarBits = make(map[string]map[string]uint64)
 // BitsToCalendar: [
 // 	{
 // 		date : {
-// 			value: "2022/04/16"
-// 			text: "04/16"
-// 			weekday: "土"
+// 			Value: "2022/04/16"
+// 			Text: "04/16"
+// 			Weekday: "土"
 // 		},
 // 		times: [
 // 			{
-// 				value: "2022-04-16T19:00+09:00"
-// 				text: "19:00"
+// 				Value: "2022-04-16T19:00+09:00"
+// 				Text: "19:00"
 // 			},
 // 			{
-// 				value: "2022-04-16T19:30+09:00"
-// 				text: "19:30"
+// 				Value: "2022-04-16T19:30+09:00"
+// 				Text: "19:30"
 // 			},
 // 			{
-// 				value: "2022-04-16T19:00+09:00"
-// 				text: "20:00"
+// 				Value: "2022-04-16T19:00+09:00"
+// 				Text: "20:00"
 // 			},
 // 		],
 //
 // 	},
 // 	{
 // 		date : {
-// 			value: "2022/04/17"
-// 			text: "04/17"
-// 			weekday: "土"
+// 			Value: "2022/04/17"
+// 			Text: "04/17"
+// 			Weekday: "土"
 // 		},
 // 		times: [
 // 			{
-// 				value: "2022-04-17T19:00+09:00"
-// 				text: "19:00"
+// 				Value: "2022-04-17T19:00+09:00"
+// 				Text: "19:00"
 // 			},
 // 			{
-// 				value: "2022-04-17T19:30+09:00"
-// 				text: "19:30"
+// 				Value: "2022-04-17T19:30+09:00"
+// 				Text: "19:30"
 // 			},
 // 			{
-// 				value: "2022-04-17T19:00+09:00"
-// 				text: "20:00"
+// 				Value: "2022-04-17T19:00+09:00"
+// 				Text: "20:00"
 // 			}
 // 		],
 // 	}
@@ -79,18 +80,18 @@ var CalendarBits = make(map[string]map[string]uint64)
 type BitsToCalendars []BitsToCalendar
 
 type BitsToCalendar struct {
-	BitsToCalendarDates []BitsToCalendarDate `json:"dates"`
+	BitsToCalendarDate  BitsToCalendarDate   `json:"date"`
 	BitsToCalendarTimes []BitsToCalendarTime `json:"times"`
 }
 
 type BitsToCalendarDate struct {
-	value   string
-	text    string
-	weekday string
+	Value   string `json:"value"`
+	Text    string `json:"text"`
+	Weekday string `json:"weekday"`
 }
 type BitsToCalendarTime struct {
-	value string
-	text  string
+	Value string `json:"value"`
+	Text  string `json:"text"`
 }
 
 // Event calendarEventsからアプリ用に変換したもの
@@ -122,15 +123,16 @@ func main() {
 	const days = 2
 	startMinTime := 8
 	endMaxTime := 20
-	businessTimeRange := endMaxTime - startMinTime
-	fmt.Println(businessTimeRange)
+	_ = endMaxTime - startMinTime
+	// businessTimeRange := endMaxTime - startMinTime
+	// fmt.Println(businessTimeRange)
 
 	datetimeMax := time.Now().AddDate(0, 0, days)
 	datetimeMin := time.Now().AddDate(0, 0, 1)
 	timeMax := datetimeMax.Format(time.RFC3339)
 	timeMin := datetimeMin.Format(time.RFC3339)
-	fmt.Println(timeMin)
-	fmt.Println(timeMax)
+	// fmt.Println(timeMin)
+	// fmt.Println(timeMax)
 
 	// sample calendar ids
 	calendarIds := []string{
@@ -189,12 +191,12 @@ func main() {
 		}
 	}
 
-	for date, v := range CalendarBits {
-		fmt.Printf("------ %v ------\n", date)
-		for email, bits := range v {
-			fmt.Printf("\t%v %064b\n", email, bits)
-		}
-	}
+	// for date, v := range CalendarBits {
+	// 	fmt.Printf("------ %v ------\n", date)
+	// 	for email, bits := range v {
+	// 		fmt.Printf("\t%v %064b\n", email, bits)
+	// 	}
+	// }
 
 	dateBits := make(map[string]uint64)
 	for date, v := range CalendarBits {
@@ -208,25 +210,42 @@ func main() {
 			// fmt.Printf("%v: %v %064b\n", date, email, bits)
 		}
 	}
-	for date, v := range dateBits {
-		fmt.Printf("///////// %v /////////\n", date)
-		fmt.Printf("%064b\n", v)
-	}
+	// for date, v := range dateBits {
+	// 	fmt.Printf("///////// %v /////////\n", date)
+	// 	fmt.Printf("%064b\n", v)
+	// }
 
+	resp := make(BitsToCalendars, 0, days)
 	for i, v := range dateBits {
-		t, _ := time.Parse("2006/01/02", i)
-		fmt.Printf("-------%v-------\n", i)
+		date, _ := time.Parse("2006/01/02", i)
+		// fmt.Printf("-------%v-------\n", i)
+
+		calendarDate := BitsToCalendarDate{Value: date.Format("2006/01/02"), Text: date.Format("01/02"), Weekday: date.Weekday().String()}
+		bt := BitsToCalendar{
+			BitsToCalendarDate:  calendarDate,
+			BitsToCalendarTimes: make([]BitsToCalendarTime, 0, endMaxTime*2),
+		}
+
 		for i := uint(startMinTime * 2); i < uint(endMaxTime*2); i++ {
 			// fmt.Println(v & (1 << i))
 			if v&(1<<i) != 1<<i {
 				hour := i / 2
 				minute := i % 2 * 30
-				a := time.Date(t.Year(), t.Month(), t.Day(), int(hour), int(minute), 0, 0, time.Local)
-				fmt.Println(a)
+				freeTime := time.Date(date.Year(), date.Month(), date.Day(), int(hour), int(minute), 0, 0, time.Local)
+				// fmt.Println(freeTime)
+				calendarTime := BitsToCalendarTime{Value: freeTime.Format(time.RFC3339), Text: freeTime.Format("15:04")}
+				bt.BitsToCalendarTimes = append(bt.BitsToCalendarTimes, calendarTime)
 			}
 		}
-		fmt.Printf("-------%v-------\n", i)
+		resp = append(resp, bt)
+		// fmt.Printf("-------%v-------\n", i)
 	}
+
+	b, err := json.MarshalIndent(resp, "", "    ")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(string(b))
 
 }
 
