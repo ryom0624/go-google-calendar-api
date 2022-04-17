@@ -104,6 +104,11 @@ type Event struct {
 	EndDateTime   time.Time
 }
 
+const days = 14
+const interviewTimeFrame = 30
+
+var regularHolidayWeekdays = []time.Weekday{time.Wednesday, time.Thursday}
+
 func main() {
 	ctx := context.Background()
 	srvAcc, err := ioutil.ReadFile("./credentials/service_account.json")
@@ -120,25 +125,34 @@ func main() {
 		log.Fatal(err)
 	}
 
-	const days = 2
 	startMinTime := 8
 	endMaxTime := 20
 	_ = endMaxTime - startMinTime
 	// businessTimeRange := endMaxTime - startMinTime
 	// fmt.Println(businessTimeRange)
 
-	datetimeMax := time.Now().AddDate(0, 0, days)
+	datetimeMax := time.Now().AddDate(0, 0, days+1)
 	datetimeMin := time.Now().AddDate(0, 0, 1)
 	timeMax := datetimeMax.Format(time.RFC3339)
 	timeMin := datetimeMin.Format(time.RFC3339)
-	// fmt.Println(timeMin)
-	// fmt.Println(timeMax)
+	fmt.Println(timeMin)
+	fmt.Println(timeMax)
 
 	// sample calendar ids
 	calendarIds := []string{
 		"kg090637fo0f1lg5s3ham2bhk8@group.calendar.google.com",
 		"0lqtb45e5rpi3jmvjs4kcrrh94@group.calendar.google.com",
 		"7j4hmerqr14ptp98p6b5p3io2k@group.calendar.google.com",
+	}
+
+	holidays := make([]string, 0, 0)
+	holidayCalendarId := "ja.japanese#holiday@group.v.calendar.google.com"
+	holidayEvents, err := calendarService.Events.List(holidayCalendarId).MaxResults(int64(250)).TimeMin(timeMin).TimeMax(timeMax).TimeZone(defaultTimeZone).Do()
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, v := range holidayEvents.Items {
+		holidays = append(holidays, v.Start.Date)
 	}
 
 	for _, id := range calendarIds {
@@ -226,11 +240,28 @@ func main() {
 			BitsToCalendarTimes: make([]BitsToCalendarTime, 0, endMaxTime*2),
 		}
 
+		isHoliday := false
+		for _, holiday := range regularHolidayWeekdays {
+			if holiday == date.Weekday() {
+				isHoliday = true
+			}
+		}
+		for _, holiday := range holidays {
+			if holiday == date.Format("2006-01-02") {
+				isHoliday = true
+			}
+		}
+
+		if isHoliday {
+			displayToFreeBusyCalendar = append(displayToFreeBusyCalendar, bt)
+			continue
+		}
+
 		for i := uint(startMinTime * 2); i < uint(endMaxTime*2); i++ {
 			// fmt.Println(v & (1 << i))
 			if v&(1<<i) != 1<<i {
-				hour := i / 2
-				minute := i % 2 * 30
+				hour := i / (60 / interviewTimeFrame)
+				minute := i % (60 / interviewTimeFrame) * interviewTimeFrame
 				freeTime := time.Date(date.Year(), date.Month(), date.Day(), int(hour), int(minute), 0, 0, time.Local)
 				// fmt.Println(freeTime)
 				calendarTime := BitsToCalendarTime{Value: freeTime.Format(time.RFC3339), Text: freeTime.Format("15:04")}
@@ -286,14 +317,14 @@ func calcBit(mapDate map[string]uint64, event *Event) error {
 		return nil
 	}
 
-	startTimeBit := uint64(event.StartDateTime.Hour() * 2)
-	if event.StartDateTime.Minute() >= 30 {
+	startTimeBit := uint64(event.StartDateTime.Hour() * (60 / interviewTimeFrame))
+	if event.StartDateTime.Minute() >= interviewTimeFrame {
 		startTimeBit++
 	}
-	endTimeBit := uint64(event.EndDateTime.Hour() * 2)
+	endTimeBit := uint64(event.EndDateTime.Hour() * (60 / interviewTimeFrame))
 	if event.EndDateTime.Minute() == 0 {
 		endTimeBit--
-	} else if event.EndDateTime.Minute() > 30 {
+	} else if event.EndDateTime.Minute() > interviewTimeFrame {
 		endTimeBit++
 	}
 
