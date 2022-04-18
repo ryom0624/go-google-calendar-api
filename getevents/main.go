@@ -13,8 +13,12 @@ import (
 )
 
 const (
-	DefaultTimeZone = "Asia/Tokyo"
-	FormatDate      = "2006/01/02"
+	DefaultTimeZone       = "Asia/Tokyo"
+	FormatDate            = "2006/01/02"
+	DaysRange             = 14
+	EventTimeFrameMinutes = 30 // 1個の時間枠
+	StartMinTimeHour      = 8
+	EndMaxTimeHour        = 20
 )
 
 // CalendarBits 日付ごとに予定の状況を管理する
@@ -107,10 +111,14 @@ type Event struct {
 	EndDateTime   time.Time
 }
 
-const DaysRange = 14
-const InterviewTimeFrame = 30
-
 var regularHolidayWeekdays = []time.Weekday{time.Wednesday, time.Thursday}
+
+// sample calendar ids
+var calendarIds = []string{
+	"kg090637fo0f1lg5s3ham2bhk8@group.calendar.google.com",
+	"0lqtb45e5rpi3jmvjs4kcrrh94@group.calendar.google.com",
+	"7j4hmerqr14ptp98p6b5p3io2k@group.calendar.google.com",
+}
 
 func main() {
 	ctx := context.Background()
@@ -128,12 +136,6 @@ func main() {
 		log.Fatal(err)
 	}
 
-	startMinTime := 8
-	endMaxTime := 20
-	_ = endMaxTime - startMinTime
-	// businessTimeRange := endMaxTime - startMinTime
-	// fmt.Println(businessTimeRange)
-
 	now := time.Now()
 	// 今日 + 翌日のスケジュール(+1d) + 期間(+DaysRange d) + 翌日(+1d)からnano秒マイナスして0時直前を取得(-1 nano)
 	datetimeMin := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, time.Local)
@@ -143,13 +145,8 @@ func main() {
 	fmt.Println(timeMin)
 	fmt.Println(timeMax)
 
-	// sample calendar ids
-	calendarIds := []string{
-		"kg090637fo0f1lg5s3ham2bhk8@group.calendar.google.com",
-		"0lqtb45e5rpi3jmvjs4kcrrh94@group.calendar.google.com",
-		"7j4hmerqr14ptp98p6b5p3io2k@group.calendar.google.com",
-	}
-
+	// 祝日のdateを保持する配列
+	// ex: ["2022/04/29", "2022/05/02"]
 	holidayDates := make([]string, 0, 0)
 	holidayCalendarId := "ja.japanese#holiday@group.v.calendar.google.com"
 	holidayCalendarEvents, err := calendarService.Events.List(holidayCalendarId).MaxResults(int64(250)).TimeMin(timeMin).TimeMax(timeMax).TimeZone(DefaultTimeZone).Do()
@@ -174,7 +171,9 @@ func main() {
 
 			// "2022/04/16": 000000000000000000001111110001100001000110000000
 			mapDateBits := make(map[string]uint64)
-			convertToBits(mapDateBits, event)
+			if err := convertToBits(mapDateBits, event); err != nil {
+				log.Fatal(err)
+			}
 			for date, v := range mapDateBits {
 				// CalendarBitsがネストのため先に日付キーをチェックし、なければIDとbitsのkey:valueを入れる。
 				if _, ok := CalendarBits[date]; !ok {
@@ -208,7 +207,6 @@ func main() {
 	// ex: 2022/04/19のイベントがまったくないとき、CalendarBitsの2022/04/19のキーを作成した上ですべてに0を入れる。
 	// {"2022/04/18": {"hoge@example.com": 0000000000001110...}, "2022/04/20": {"hoge@example.com": 0000001111100000...} }
 	// -> {"2022/04/18": {"hoge@example.com": 000000100100000...},"2022/04/19": {"hoge@example.com": 0000000000000000...}, "2022/04/20": {"hoge@example.com": 0000001111100000...} }
-
 	for _, id := range calendarIds {
 		diffDates := datetimeMax.Sub(datetimeMin).Hours() / 24
 		forIncrementDate := datetimeMin
@@ -235,6 +233,10 @@ func main() {
 	// 	}
 	// }
 
+	// 日付:bits に集約する。
+	// 誰か1人でも空きがあれば予定が空いている仕様。
+	// keyがない場合に論理積で集約するとすべて0になる。間違いの例: https://go.dev/play/p/Vb-RNavLeHc
+	// 最初は論理和で集約し、2つ目から論理積で集約する。 https://go.dev/play/p/psnhye-ZZKp
 	dateBits := make(map[string]uint64)
 	for date, v := range CalendarBits {
 		for _, bits := range v {
@@ -252,17 +254,21 @@ func main() {
 	// 	fmt.Printf("%064b\n", v)
 	// }
 
+	// webサーバーと仮定し、レスポンス用で見やすい形に成形する。
+	// 論理積で集約したbitsを空き時間枠に変換する。
 	displayToFreeBusyCalendar := make(FreeTimeSchedules, 0, DaysRange)
-	for i, v := range dateBits {
-		date, _ := time.Parse(FormatDate, i)
+	for strDate, bits := range dateBits {
+		date, _ := time.Parse(FormatDate, strDate)
 		// fmt.Printf("-------%v-------\n", i)
 
 		calendarDate := FreeTimeDate{Value: date.Format(FormatDate), Text: date.Format("01/02"), Weekday: date.Weekday().String()}
 		bt := FreeTimeSchedule{
 			FreeTimeDate: calendarDate,
-			FreeTimes:    make([]FreeTime, 0, endMaxTime*2),
+			FreeTimes:    make([]FreeTime, 0, EndMaxTimeHour*2), // 仮で30分枠で*2している。
 		}
 
+		// 休日、祝日の場合は空いていないという形に変換する。
+		// Todo: そもそもbit換算時に全部1にできると良いかも
 		isHoliday := false
 		for _, holiday := range regularHolidayWeekdays {
 			if holiday == date.Weekday() {
@@ -274,17 +280,32 @@ func main() {
 				isHoliday = true
 			}
 		}
-
+		// times(FreeTimes)のみ空で返すでOK
 		if isHoliday {
 			displayToFreeBusyCalendar = append(displayToFreeBusyCalendar, bt)
 			continue
 		}
 
-		for i := uint(startMinTime * 2); i < uint(endMaxTime*2); i++ {
+		// 開始時間〜終了時間のbit位置（30分枠で*2している）でループを実行
+		// Todo: 1時間枠/15分枠の対応
+		for i := uint(StartMinTimeHour * 2); i < uint(EndMaxTimeHour*2); i++ {
 			// fmt.Println(v & (1 << i))
-			if v&(1<<i) != 1<<i {
-				hour := i / (60 / InterviewTimeFrame)
-				minute := i % (60 / InterviewTimeFrame) * InterviewTimeFrame
+
+			// bits&(1<<i) != 1<<iについて
+			// 右からi番目のbitを1にしたときの値 と bitsの論理積を取得し、
+			// その時間枠が1である（右オペランドの1<<iで右からi番目のbitが1かどうかを見ている）かを条件分岐
+			// もし1であれば予定ありなのでなにもしない → FreeTime構造体は空で返す。
+			// もし1でなければ（0であれば）、予定なしなので、空き時間をFreeTime構造体にビルドする。
+			if bits&(1<<i) != 1<<i {
+				// 右からi番目を時間枠の分割（1つの時間枠が30分なら 60分 / 30分 = 2）で除算する。
+				// 右から8番目が0であれば、 8 / (60/30) = 8 / 2 = 4 （4時台）
+				// 右から9番目が0であれば、 9 / (60/30) = 9 / 2 = 4 （4時台）
+				hour := i / (60 / EventTimeFrameMinutes)
+				// 右からi番目を時間枠の分割（1つの時間枠が30分なら 60分 / 30分 = 2）の余りに1つの時間枠をかける
+				// 右から8番目が0であれば、 8 % (60/30) * 30 = 8 % 2 * 30 = 0 * 30 = 0
+				// 右から9番目が0であれば、 9 % (60/30) * 30 = 9 % 2 * 30 = 1 * 30 = 30
+				minute := i % (60 / EventTimeFrameMinutes) * EventTimeFrameMinutes
+				// → 右から8/9番目が0であれば04:00~04:30 / 04:30 ~ 05:00までが空きだということになる。
 				freeTime := time.Date(date.Year(), date.Month(), date.Day(), int(hour), int(minute), 0, 0, time.Local)
 				// fmt.Println(freeTime)
 				calendarTime := FreeTime{Value: freeTime.Format(time.RFC3339), Text: freeTime.Format("15:04")}
@@ -330,6 +351,9 @@ func NewEvent(id, name, title string, item *calendar.Event) (*Event, error) {
 	return &Event{CalendarId: id, CalendarName: name, Title: title, IsAllDay: isAllDay, StartDateTime: sTime, EndDateTime: eTime}, nil
 }
 
+// convertToBits  key:日付 value:bit換算の予定
+// Todo: 営業時間枠のみのbitを用意する
+// Todo: 15分刻みの時間枠対応
 func convertToBits(mapDateBits map[string]uint64, event *Event) error {
 	// 終日イベントの場合は日にちごとに分割してすべて1となるbitの群をなす。
 	if event.IsAllDay {
@@ -360,8 +384,9 @@ func convertToBits(mapDateBits map[string]uint64, event *Event) error {
 	// startTimeBitは上記例の場合16という数字を得られるが、bit処理する際に17番目が1になる。
 	// 1 << 16 = 17bit目に1が立つ（1 << 0 で1bit目）
 	// sample: https://go.dev/play/p/jkBDUwnxWMQ
-	startTimeBit := uint64(event.StartDateTime.Hour() * (60 / InterviewTimeFrame))
-	if event.StartDateTime.Minute() >= InterviewTimeFrame {
+	// Todo: 15分刻みの対応
+	startTimeBit := uint64(event.StartDateTime.Hour() * (60 / EventTimeFrameMinutes))
+	if event.StartDateTime.Minute() >= EventTimeFrameMinutes {
 		startTimeBit++
 	}
 	// 予定終了のbit位置を取得
@@ -369,16 +394,16 @@ func convertToBits(mapDateBits map[string]uint64, event *Event) error {
 	// 7bit目が1になってしまいずれる -> 6bit目に1を立てたいので-1する。
 	// 00 10 00 00 -> i << 5
 	// https://go.dev/play/p/KNkmnPrSd0K
-	endTimeBit := uint64(event.EndDateTime.Hour() * (60 / InterviewTimeFrame))
+	// Todo: 15分刻みの対応
+	endTimeBit := uint64(event.EndDateTime.Hour() * (60 / EventTimeFrameMinutes))
 	if event.EndDateTime.Minute() == 0 {
 		endTimeBit--
-	} else if event.EndDateTime.Minute() > InterviewTimeFrame {
+	} else if event.EndDateTime.Minute() > EventTimeFrameMinutes {
 		endTimeBit++
 	}
 
 	// 時間枠をbitに換算する。
 	date := event.StartDateTime.Format(FormatDate)
-	// tmp := make(map[string]uint64)
 
 	// 論理和で集約していく。
 	// ex1: 01:00~02:00に予定がある場合、右から3bit目と4bit目を1にする。（右から1bit目は 00:00 ~ 00:30）
